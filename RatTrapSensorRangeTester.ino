@@ -4,6 +4,8 @@
     Designed for a Arduino Uno attached to
     Lo-Ra radio via SPI and an LCD screen via I2C.
 
+    Simply sends a random 4 digit number to the server and waits for the same
+    number to be returned along with the remote RSSI.
 
     Pin Assignments:
      3 -> LoRa DOI0
@@ -20,6 +22,7 @@
     September 2018
 */
 
+#include <stdlib.h>
 
 #include <Wire.h>
 #include <LiquidCrystal_PCF8574.h>
@@ -29,8 +32,14 @@
 
 #include <Bounce2.h>
 
+
+
+
 Bounce pushbutton = Bounce();
 #define PUSHBUTTON_PIN  4
+
+
+#define MAX_REPLY_TRIES 3 // Try 3 times for a reply
 
 
 #define RFM95_CS 10  // Clock select should be on 10
@@ -95,15 +104,90 @@ void doTest()
 {
   lcd.home();
   lcd.clear();
-  lcd.print("Running Test");
-  
+  Serial.println("Sending test message");
+
+  // Generate a four digit random number between 1001 and 9999
+  long rand_number = random(1001, 10000);
+  Serial.print("Random number to send = ");
+  Serial.println(rand_number, DEC);
+  char message[11] = "Test:";
+  itoa( rand_number, message + 5, 10);
+  message[10] = '\0';
+
+  Serial.print("Sent - ");
+  Serial.println(message);
+
+  lcd.setCursor(0, 0);
+  lcd.print("Sent:");
+  lcd.setCursor(6, 0 );
+  lcd.print(&(message[5]));
+  rf95.send((uint8_t *)message, sizeof(message));
 
 
-  
+  delay(10);
+  rf95.waitPacketSent();
+
+
+  // Look for a response:
+  bool got_reply = false;
+
+
+  // Try three times to listen for a reply:
+  for ( int attempt = 0; attempt < MAX_REPLY_TRIES; attempt++ ) {
+    char buf[RH_RF95_MAX_MESSAGE_LEN];
+    uint8_t len = sizeof(buf);
+    if (rf95.waitAvailableTimeout(1000))
+    {
+      if (rf95.recv(buf, &len))
+      {
+
+        // Now we have a reply. Check that it's the number we expect and
+        // extract at the RSSI at the remote station.
+        delay(1000);
+        RH_RF95::printBuffer("Received: ", buf, len);
+        Serial.println((char*)buf);
+        Serial.print("Local RSSI: ");
+        float local_rssi = rf95.lastRssi();
+        Serial.println(local_rssi, DEC);
+        got_reply = true;
+
+        lcd.setCursor(0, 1);
+        lcd.print("Rcvd: ");
+        float remote_rssi = atof(&(buf[11]));
+        buf[11] = '\0';
+        long response = long(atoi(&(buf[4])));
+        Serial.println( remote_rssi, DEC);
+        Serial.println( response, DEC);
+        lcd.setCursor(6, 1);
+        lcd.print(response);
+        if (  response != rand_number) {
+          lcd.print("** Fail!");
+        } else {
+          lcd.print(" OK");
+
+        }
+
+        lcd.setCursor(0, 2);
+        lcd.print("Local RSSI :");
+        lcd.setCursor(12, 2);
+        lcd.print(local_rssi);
+        lcd.setCursor(0, 3);
+        lcd.print("Remote RSSI:");
+        lcd.setCursor(12, 3);
+        lcd.print(remote_rssi);
+
+        break;
+      }
+    }
+  }
+
+
+  if ( !got_reply) {
+    lcd.setCursor(0, 1);
+    lcd.print("Failed: no reply");
+  }
+
 }
-
-
-
 
 
 void setup()
@@ -111,7 +195,7 @@ void setup()
   int error;
 
   Serial.begin(9600);
-  Serial.println("LCD...");
+
 
   while (! Serial);
 
@@ -134,13 +218,13 @@ void setup()
   lcd.print("LoRat Range Tester");
   lcd.setCursor(0, 1);
 
-
+  randomSeed(analogRead(0));
 
   setupLoRa();
 
   pinMode(PUSHBUTTON_PIN, INPUT_PULLUP);
   pushbutton.attach(PUSHBUTTON_PIN);
-  pushbutton.interval(5);
+  pushbutton.interval(50);
 
   lcd.setCursor(0, 1);
   lcd.print("Radio Initialized OK");
@@ -156,13 +240,13 @@ void setup()
 
 } // setup()
 
+
+
 void loop() {
 
   pushbutton.update();
 
-  int value = pushbutton.read();
-
-  if ( value == LOW ) {
+  if ( pushbutton.fell() ) {
     doTest();
   }
 
